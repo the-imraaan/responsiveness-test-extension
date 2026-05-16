@@ -1,6 +1,6 @@
 ## Implementation
 
-This is a Chrome browser extension for responsive testing.
+This is a browser extension for responsive testing.
 
 ### Features Implemented:
 - Three device groups: `Mobile and small` (360, 390, 428), `Medium screen` (768, 820, 1024), and `Desktop` (1440, 1728, 2560)
