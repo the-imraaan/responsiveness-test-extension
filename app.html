@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Responsive Tester</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="toolbar">
+    <div class="toolbar-group">
+      <button id="screenshot">Screenshot</button>
+      <button id="record">Record</button>
+      <button id="stopRecord">Stop Record</button>
+    </div>
+
+    <div class="toolbar-group">
+      <button id="scrollSyncToggle" type="button" aria-pressed="false" data-active="false">Scroll Sync Off</button>
+    </div>
+
+    <div class="toolbar-group">
+      <span class="toolbar-label">Zoom</span>
+      <button id="zoomOut" type="button" aria-label="Zoom out">-</button>
+      <span class="zoom-value" id="zoomValue">70%</span>
+      <button id="zoomIn" type="button" aria-label="Zoom in">+</button>
+      <button id="zoomFit" type="button">Fit</button>
+    </div>
+
+    <div class="toolbar-group toolbar-stack toolbar-group-right">
+      <span class="toolbar-label">Device Group</span>
+      <div class="preset-group">
+        <button id="groupMobileSmall" type="button" data-device-group="mobile-small">Mobile and small</button>
+        <button id="groupMedium" type="button" data-device-group="medium">Medium screen</button>
+        <button id="groupDesktop" type="button" data-device-group="desktop">Desktop</button>
+      </div>
+    </div>
+
+  </div>
+  <div class="device-bar" id="deviceBar"></div>
+  <div class="screens" id="screens"></div>
+  <script src="app.js"></script>
+</body>
+</html>
