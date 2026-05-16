@@ -1,10 +1,12 @@
 # Responsiveness Test Extension
 
-A Chrome extension for side-by-side responsive website testing across mobile, tablet, and desktop viewport presets.
+A Browser extension for side-by-side responsive website testing across mobile, tablet, and desktop viewport presets.
 
 ## Overview
 
 Responsiveness Test Extension opens the current page in multiple synchronized previews so you can quickly evaluate layouts across common screen sizes. It is designed for fast manual QA, visual comparison, screenshots, and lightweight interaction testing.
+
+<img width="1506" height="864" alt="responsive_screen1" src="https://github.com/user-attachments/assets/2e10a3d4-0e60-4dcb-a432-47037cbb1549" />
 
 ## Features
 
@@ -26,10 +28,11 @@ Responsiveness Test Extension opens the current page in multiple synchronized pr
 
 ## Installation
 
-1. Open Chrome and go to `chrome://extensions`
-2. Enable **Developer mode**
-3. Click **Load unpacked**
-4. Select this project folder
+1. Open any browser
+2. Go to the Extention page
+3. Enable **Developer mode**
+4. Click **Load unpacked**
+5. Select this project folder
 
 ## How to Use
 
@@ -55,41 +58,5 @@ Responsiveness Test Extension opens the current page in multiple synchronized pr
 
 ## Repository Description
 
-Chrome extension for side-by-side responsive testing with multi-device previews, sync scroll, screenshots, click sync, and recording.
+Browser extension for side-by-side responsive testing with multi-device previews, sync scroll, screenshots, click sync, and recording.
 
-## Creating a Release on GitHub
-
-### Option 1: Create a release from the GitHub UI
-
-1. Open the repository on GitHub
-2. In the right sidebar or top navigation, go to **Releases**
-3. Click **Draft a new release**
-4. Create a new tag, for example `v1.0.0`
-5. Add a release title, for example `v1.0.0 - Initial release`
-6. Add release notes describing what is included
-7. Click **Publish release**
-
-Suggested first release notes:
-
-- Initial version of the Responsiveness Test Extension
-- Multi-device responsive preview testing
-- Custom device groups with persistence
-- Sync scroll and click sync
-- Screenshot export to PNG
-- Screen recording export to WebM
-
-### Option 2: Create a release using Git tags
-
-```bash name=terminal
- git tag v1.0.0
- git push origin v1.0.0
-```
-
-Then create the release from the **Releases** page on GitHub using that tag.
-
-## Suggested Next Improvements
-
-- Add screenshots or GIF demos to the README
-- Add a license file
-- Add versioned release notes for each update
-- Add badges for version and browser support
