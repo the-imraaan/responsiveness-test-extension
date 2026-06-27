@@ -1,5 +1,9 @@
+importScripts('extension-api.js');
+
 const PREVIEW_DATA_PREFIX = 'previewData:';
 const PREVIEW_TAB_PREFIX = 'previewTab:';
+const extensionApi = globalThis.ExtensionApi;
+const browserApi = extensionApi.raw;
 
 function getPreviewDataKey(previewKey) {
   return `${PREVIEW_DATA_PREFIX}${previewKey}`;
@@ -9,49 +13,50 @@ function getPreviewTabKey(tabId) {
   return `${PREVIEW_TAB_PREFIX}${tabId}`;
 }
 
-async function openImagePreview(blobUrl, filename = '') {
+async function openImagePreview(blobUrl, filename = '', deviceLabels = []) {
   const previewKey = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   const previewDataKey = getPreviewDataKey(previewKey);
   const previewUrl =
-    chrome.runtime.getURL('preview.html') +
+    extensionApi.getUrl('preview.html') +
     `?previewKey=${encodeURIComponent(previewKey)}`;
 
-  await chrome.storage.session.set({
+  await extensionApi.sessionStorageSet({
     [previewDataKey]: {
       blobUrl,
-      filename
+      filename,
+      deviceLabels
     }
   });
 
   try {
-    const tab = await chrome.tabs.create({ url: previewUrl });
+    const tab = await extensionApi.tabsCreate({ url: previewUrl });
     const previewTabKey = getPreviewTabKey(tab.id);
 
-    await chrome.storage.session.set({
+    await extensionApi.sessionStorageSet({
       [previewTabKey]: previewDataKey
     });
 
     return { tabId: tab.id, previewKey };
   } catch (error) {
-    await chrome.storage.session.remove(previewDataKey);
+    await extensionApi.sessionStorageRemove(previewDataKey);
     throw error;
   }
 }
 
-chrome.action.onClicked.addListener(async (tab) => {
-  const appUrl = chrome.runtime.getURL('app.html') + '?testUrl=' + encodeURIComponent(tab.url);
+browserApi.action.onClicked.addListener(async (tab) => {
+  const appUrl = extensionApi.getUrl('app.html') + '?testUrl=' + encodeURIComponent(tab.url);
   try {
-    await chrome.tabs.sendMessage(tab.id, { type: 'toggle-tester', appUrl });
+    await extensionApi.tabsSendMessage(tab.id, { type: 'toggle-tester', appUrl });
   } catch {
-    await chrome.scripting.executeScript({
+    await extensionApi.executeScript({
       target: { tabId: tab.id },
-      files: ['content.js']
+      files: ['extension-api.js', 'content.js']
     });
-    await chrome.tabs.sendMessage(tab.id, { type: 'toggle-tester', appUrl });
+    await extensionApi.tabsSendMessage(tab.id, { type: 'toggle-tester', appUrl });
   }
 });
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+browserApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'capture-visible-tab') {
     const windowId = sender.tab?.windowId;
     const format = message?.format === 'png' ? 'png' : 'jpeg';
@@ -61,20 +66,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       options.quality = Math.max(1, Math.min(100, Math.round(message.quality)));
     }
 
-    chrome.tabs.captureVisibleTab(windowId ?? null, options, (dataUrl) => {
-      if (chrome.runtime.lastError) {
-        sendResponse({ error: chrome.runtime.lastError.message });
-        return;
-      }
-
-      sendResponse({ dataUrl });
-    });
+    extensionApi
+      .captureVisibleTab(windowId ?? null, options)
+      .then((dataUrl) => sendResponse({ dataUrl }))
+      .catch((error) => sendResponse({ error: error.message }));
 
     return true;
   }
 
   if (message?.type === 'open-image-preview') {
-    openImagePreview(message.blobUrl, message.filename)
+    openImagePreview(message.blobUrl, message.filename, message.deviceLabels)
       .then((result) => sendResponse(result))
       .catch((error) => sendResponse({ error: error.message }));
     return true;
@@ -82,46 +83,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message?.type === 'get-image-preview') {
     const previewDataKey = getPreviewDataKey(message.previewKey);
-    chrome.storage.session.get(previewDataKey, (result) => {
-      if (chrome.runtime.lastError) {
-        sendResponse({ error: chrome.runtime.lastError.message });
-        return;
-      }
-
-      sendResponse({ preview: result[previewDataKey] || null });
-    });
+    extensionApi
+      .sessionStorageGet(previewDataKey)
+      .then((result) => sendResponse({ preview: result[previewDataKey] || null }))
+      .catch((error) => sendResponse({ error: error.message }));
     return true;
   }
 
   if (message?.type === 'clear-image-preview') {
     const previewDataKey = getPreviewDataKey(message.previewKey);
-    chrome.storage.session.remove(previewDataKey, () => {
-      if (chrome.runtime.lastError) {
-        sendResponse({ error: chrome.runtime.lastError.message });
-        return;
-      }
-
-      sendResponse({ ok: true });
-    });
+    extensionApi
+      .sessionStorageRemove(previewDataKey)
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => sendResponse({ error: error.message }));
     return true;
   }
 
   return false;
 });
 
-chrome.tabs.onRemoved.addListener((tabId) => {
+browserApi.tabs.onRemoved.addListener((tabId) => {
   const previewTabKey = getPreviewTabKey(tabId);
 
-  chrome.storage.session.get(previewTabKey, (result) => {
-    if (chrome.runtime.lastError) {
-      return;
-    }
+  extensionApi
+    .sessionStorageGet(previewTabKey)
+    .then((result) => {
+      const previewDataKey = result[previewTabKey];
+      if (!previewDataKey) {
+        return;
+      }
 
-    const previewDataKey = result[previewTabKey];
-    if (!previewDataKey) {
-      return;
-    }
-
-    chrome.storage.session.remove([previewTabKey, previewDataKey]);
-  });
+      return extensionApi.sessionStorageRemove([previewTabKey, previewDataKey]);
+    })
+    .catch(() => {});
 });

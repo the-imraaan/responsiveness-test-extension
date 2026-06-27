@@ -1,4 +1,5 @@
 const APP_CHANNEL = 'responsive-tester';
+const extensionApi = globalThis.ExtensionApi;
 const STORAGE_KEYS = {
   scale: 'responsiveTesterScale',
   scrollSync: 'responsiveTesterScrollSyncEnabled',
@@ -361,60 +362,25 @@ async function canvasToJpegBlobWithSizeLimit(canvas) {
 }
 
 function storageGet(defaults) {
-  return new Promise((resolve, reject) => {
-    chrome.storage.local.get(defaults, (result) => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-        return;
-      }
-
-      resolve(result);
-    });
-  });
+  return extensionApi.storageGet(defaults);
 }
 
 function storageSet(values) {
-  return new Promise((resolve, reject) => {
-    chrome.storage.local.set(values, () => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-        return;
-      }
-
-      resolve();
-    });
-  });
+  return extensionApi.storageSet(values);
 }
 
 function sendRuntimeMessage(message) {
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage(message, (response) => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-        return;
-      }
+  return extensionApi.sendMessage(message).then((response) => {
+    if (response?.error) {
+      throw new Error(response.error);
+    }
 
-      if (response?.error) {
-        reject(new Error(response.error));
-        return;
-      }
-
-      resolve(response);
-    });
+    return response;
   });
 }
 
 function downloadFile(options) {
-  return new Promise((resolve, reject) => {
-    chrome.downloads.download(options, (downloadId) => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-        return;
-      }
-
-      resolve(downloadId);
-    });
-  });
+  return extensionApi.download(options);
 }
 
 async function downloadBlob(blob, filename) {
@@ -431,7 +397,113 @@ async function downloadBlob(blob, filename) {
   }
 }
 
-async function openBlobInNewTab(blob) {
+function getPreviewDeviceLabels(deviceList = []) {
+  return deviceList.map((device) => formatDeviceBadge(device));
+}
+
+function buildDeviceLabelSlotsFromEntries(entries = []) {
+  return entries.map((entry) => ({
+    label: formatDeviceBadge(entry.device),
+    x: Math.round(entry.screen.offsetLeft),
+    width: Math.round(entry.screen.offsetWidth)
+  }));
+}
+
+function drawRoundedRect(context, x, y, width, height, radius) {
+  const safeRadius = Math.min(radius, width / 2, height / 2);
+
+  context.beginPath();
+  context.moveTo(x + safeRadius, y);
+  context.lineTo(x + width - safeRadius, y);
+  context.quadraticCurveTo(x + width, y, x + width, y + safeRadius);
+  context.lineTo(x + width, y + height - safeRadius);
+  context.quadraticCurveTo(x + width, y + height, x + width - safeRadius, y + height);
+  context.lineTo(x + safeRadius, y + height);
+  context.quadraticCurveTo(x, y + height, x, y + height - safeRadius);
+  context.lineTo(x, y + safeRadius);
+  context.quadraticCurveTo(x, y, x + safeRadius, y);
+  context.closePath();
+}
+
+function getDeviceLabelOverlayMetrics(canvasWidth) {
+  const fontSize = Math.max(12, Math.min(20, Math.round(canvasWidth / 90)));
+  const horizontalPadding = Math.max(10, Math.round(fontSize * 0.7));
+  const verticalPadding = Math.max(6, Math.round(fontSize * 0.42));
+  const pillHeight = fontSize + verticalPadding * 2;
+  const radius = Math.round(pillHeight / 2);
+  const topOffset = Math.max(12, Math.round(fontSize * 0.65));
+  const sideInset = Math.max(8, Math.round(fontSize * 0.45));
+  const stripHeight = pillHeight + topOffset * 2;
+
+  return {
+    fontSize,
+    horizontalPadding,
+    verticalPadding,
+    pillHeight,
+    radius,
+    topOffset,
+    sideInset,
+    stripHeight
+  };
+}
+
+function drawDeviceLabelsOnCanvas(canvas, deviceSlots = []) {
+  if (!deviceSlots.length) {
+    return 0;
+  }
+
+  const context = canvas.getContext('2d');
+  if (!context) {
+    return 0;
+  }
+
+  const {
+    fontSize,
+    horizontalPadding,
+    pillHeight,
+    radius,
+    topOffset,
+    sideInset,
+    stripHeight
+  } = getDeviceLabelOverlayMetrics(canvas.width);
+
+  context.save();
+  context.font = `700 ${fontSize}px Arial, sans-serif`;
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+
+  deviceSlots.forEach((slot) => {
+    if (!slot?.label || !slot.width) {
+      return;
+    }
+
+    const textWidth = context.measureText(slot.label).width;
+    const maxPillWidth = Math.max(48, slot.width - sideInset * 2);
+    const pillWidth = Math.max(
+      Math.min(maxPillWidth, Math.ceil(textWidth + horizontalPadding * 2)),
+      Math.min(maxPillWidth, 48)
+    );
+    const pillX = Math.round(slot.x + Math.max(sideInset, (slot.width - pillWidth) / 2));
+    const pillY = topOffset;
+
+    context.fillStyle = 'rgba(255, 255, 255, 0.9)';
+    drawRoundedRect(context, pillX, pillY, pillWidth, pillHeight, radius);
+    context.fill();
+
+    context.strokeStyle = 'rgba(148, 163, 184, 0.9)';
+    context.lineWidth = 1;
+    drawRoundedRect(context, pillX, pillY, pillWidth, pillHeight, radius);
+    context.stroke();
+
+    context.fillStyle = '#102033';
+    context.fillText(slot.label, pillX + pillWidth / 2, pillY + pillHeight / 2 + 0.5);
+  });
+
+  context.restore();
+  return stripHeight;
+}
+
+async function openBlobInNewTab(blob, deviceLabels = []) {
   const blobUrl = URL.createObjectURL(blob);
   const filename = `screenshot-${new Date().toISOString().replace(/[:.]/g, '-')}.jpg`;
 
@@ -439,7 +511,8 @@ async function openBlobInNewTab(blob) {
     await sendRuntimeMessage({
       type: 'open-image-preview',
       blobUrl,
-      filename
+      filename,
+      deviceLabels
     });
   } finally {
     window.setTimeout(() => URL.revokeObjectURL(blobUrl), 10 * 60_000);
@@ -1036,6 +1109,7 @@ async function captureAllDeviceViews() {
   const originalScrollLeft = screens.scrollLeft;
   const originalScrollTop = screens.scrollTop;
   const captures = [];
+  const deviceSlots = buildDeviceLabelSlotsFromEntries(frameEntries);
 
   try {
     setScreensCaptureMode(true);
@@ -1066,10 +1140,11 @@ async function captureAllDeviceViews() {
     const sourceX = Math.max(0, captureRect.left * scaleX);
     const sourceY = Math.max(0, captureRect.top * scaleY);
     const stitchedWidth = Math.max(1, totalWidth);
+    const labelStripHeight = deviceSlots.length ? getDeviceLabelOverlayMetrics(stitchedWidth).stripHeight : 0;
 
     const canvas = document.createElement('canvas');
     canvas.width = stitchedWidth;
-    canvas.height = Math.max(1, viewportHeight);
+    canvas.height = Math.max(1, viewportHeight + labelStripHeight);
 
     const context = canvas.getContext('2d');
     if (!context) {
@@ -1096,11 +1171,13 @@ async function captureAllDeviceViews() {
         drawWidth * scaleX,
         drawHeight * scaleY,
         destinationX,
-        0,
+        labelStripHeight,
         drawWidth,
         drawHeight
       );
     });
+
+    drawDeviceLabelsOnCanvas(canvas, deviceSlots);
 
     return canvasToJpegBlobWithSizeLimit(canvas);
   } finally {
@@ -1119,7 +1196,7 @@ async function handleScreenshot() {
   try {
     await waitForFramesCaptureReady(frameEntries, CAPTURE_PROFILE);
     const { blob: screenshotBlob } = await runWithSuspendedScrollSync(() => captureAllDeviceViews());
-    await openBlobInNewTab(screenshotBlob);
+    await openBlobInNewTab(screenshotBlob, getPreviewDeviceLabels(frameEntries.map((entry) => entry.device)));
   } catch (error) {
     logError('Screenshot failed.', error);
   } finally {
@@ -1246,7 +1323,10 @@ async function captureFullPageScreenshot() {
       };
 
       const canvas = await captureDeviceFullPageCanvas(entry, captureScrollInfo, captureProfile);
-      capturedDevices.push(canvas);
+      capturedDevices.push({
+        canvas,
+        device: entry.device
+      });
 
       restoreEntryCaptureStyles(entry, originalStyles[index]);
       postToFrame(entry, 'set-overflow', { hidden: false });
@@ -1260,16 +1340,18 @@ async function captureFullPageScreenshot() {
 
     const { gap } = getScreensCaptureMetrics();
     const mergedGap = Math.round(gap);
-    const stitchedWidth = capturedDevices.reduce((total, canvas, index) => {
-      return total + canvas.width + (index > 0 ? mergedGap : 0);
+    const deviceSlots = [];
+    const stitchedWidth = capturedDevices.reduce((total, capturedDevice, index) => {
+      return total + capturedDevice.canvas.width + (index > 0 ? mergedGap : 0);
     }, 0);
-    const stitchedHeight = capturedDevices.reduce((maxHeight, canvas) => {
-      return Math.max(maxHeight, canvas.height);
+    const stitchedHeight = capturedDevices.reduce((maxHeight, capturedDevice) => {
+      return Math.max(maxHeight, capturedDevice.canvas.height);
     }, 0);
+    const labelStripHeight = capturedDevices.length ? getDeviceLabelOverlayMetrics(stitchedWidth).stripHeight : 0;
 
     const canvas = document.createElement('canvas');
     canvas.width = Math.max(1, stitchedWidth);
-    canvas.height = Math.max(1, stitchedHeight);
+    canvas.height = Math.max(1, stitchedHeight + labelStripHeight);
 
     const context = canvas.getContext('2d');
     if (!context) {
@@ -1280,14 +1362,22 @@ async function captureFullPageScreenshot() {
     context.fillRect(0, 0, canvas.width, canvas.height);
 
     let currentX = 0;
-    capturedDevices.forEach((deviceCanvas, index) => {
+    capturedDevices.forEach((capturedDevice, index) => {
       if (index > 0) {
         currentX += mergedGap;
       }
 
-      context.drawImage(deviceCanvas, currentX, 0);
+      const deviceCanvas = capturedDevice.canvas;
+      context.drawImage(deviceCanvas, currentX, labelStripHeight);
+      deviceSlots.push({
+        label: formatDeviceBadge(capturedDevice.device),
+        x: currentX,
+        width: deviceCanvas.width
+      });
       currentX += deviceCanvas.width;
     });
+
+    drawDeviceLabelsOnCanvas(canvas, deviceSlots);
 
     return canvasToJpegBlobWithSizeLimit(canvas);
   } finally {
@@ -1306,8 +1396,9 @@ async function handleFullPageScreenshot() {
   screenshotFullPageButton.disabled = true;
 
   try {
+    const readyEntries = frameEntries.filter((entry) => entry.ready);
     const { blob: screenshotBlob } = await runWithSuspendedScrollSync(() => captureFullPageScreenshot());
-    await openBlobInNewTab(screenshotBlob);
+    await openBlobInNewTab(screenshotBlob, getPreviewDeviceLabels(readyEntries.map((entry) => entry.device)));
   } catch (error) {
     logError('Full page screenshot failed.', error);
   } finally {
@@ -1326,27 +1417,18 @@ function getRecorderMimeType() {
 }
 
 function captureActiveTab() {
-  return new Promise((resolve, reject) => {
-    chrome.tabCapture.capture(
-      {
-        video: true,
-        audio: false
-      },
-      (stream) => {
-        if (chrome.runtime.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-          return;
-        }
-
-        if (!stream) {
-          reject(new Error('Chrome did not return a tab stream.'));
-          return;
-        }
-
-        resolve(stream);
+  return extensionApi
+    .captureTabStream({
+      video: true,
+      audio: false
+    })
+    .then((stream) => {
+      if (!stream) {
+        throw new Error('The browser did not return a tab stream.');
       }
-    );
-  });
+
+      return stream;
+    });
 }
 
 async function getRecordingStream() {

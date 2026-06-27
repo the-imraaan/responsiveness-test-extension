@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Responsive Tester",
-  "version": "1.7.5",
+  "version": "2.2.0",
   "description": "Test websites responsively with multiple screens, sync interactions, screenshots and recordings.",
   "permissions": [
     "activeTab",
@@ -24,14 +24,14 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "js": ["extension-api.js", "content.js"],
       "run_at": "document_start",
       "all_frames": true
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["app.html", "app.js", "styles.css"],
+      "resources": ["app.html", "app.js", "styles.css", "preview.html", "preview.js", "preview.css", "extension-api.js"],
       "matches": ["<all_urls>"]
     }
   ],

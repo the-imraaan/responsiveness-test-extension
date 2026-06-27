@@ -9,6 +9,14 @@
     return rawApi?.runtime?.lastError ?? null;
   }
 
+  function getStorageArea(areaName) {
+    if (areaName === 'session' && rawApi?.storage?.session) {
+      return rawApi.storage.session;
+    }
+
+    return rawApi?.storage?.local ?? null;
+  }
+
   function resolvePromiseOrCallback(name, method, context, args = []) {
     if (typeof method !== 'function') {
       return Promise.reject(makeMissingApiError(name));
@@ -60,6 +68,9 @@
     tabsSendMessage(tabId, message) {
       return resolvePromiseOrCallback('tabs.sendMessage', rawApi?.tabs?.sendMessage, rawApi?.tabs, [tabId, message]);
     },
+    tabsCreate(createProperties) {
+      return resolvePromiseOrCallback('tabs.create', rawApi?.tabs?.create, rawApi?.tabs, [createProperties]);
+    },
     executeScript(details) {
       return resolvePromiseOrCallback('scripting.executeScript', rawApi?.scripting?.executeScript, rawApi?.scripting, [details]);
     },
@@ -71,6 +82,18 @@
     },
     storageSet(values) {
       return resolvePromiseOrCallback('storage.local.set', rawApi?.storage?.local?.set, rawApi?.storage?.local, [values]);
+    },
+    sessionStorageGet(defaults) {
+      const area = getStorageArea('session');
+      return resolvePromiseOrCallback('storage.session.get', area?.get, area, [defaults]);
+    },
+    sessionStorageSet(values) {
+      const area = getStorageArea('session');
+      return resolvePromiseOrCallback('storage.session.set', area?.set, area, [values]);
+    },
+    sessionStorageRemove(keys) {
+      const area = getStorageArea('session');
+      return resolvePromiseOrCallback('storage.session.remove', area?.remove, area, [keys]);
     },
     download(options) {
       return resolvePromiseOrCallback('downloads.download', rawApi?.downloads?.download, rawApi?.downloads, [options]);

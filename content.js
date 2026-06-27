@@ -1,5 +1,7 @@
 const APP_CHANNEL = 'responsive-tester';
 const SCROLL_SUPPRESS_MS = 220;
+const extensionApi = globalThis.ExtensionApi;
+const browserApi = extensionApi.raw;
 
 let testerEnabled = false;
 let frameKey = window.name || location.href;
@@ -773,7 +775,7 @@ function toggleTesterOverlay(appUrl) {
   document.documentElement.style.overflow = 'hidden';
 }
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+browserApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'toggle-tester' && message.appUrl) {
     toggleTesterOverlay(message.appUrl);
     sendResponse({ ok: true });

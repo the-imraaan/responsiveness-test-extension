@@ -3,22 +3,15 @@ const previewKey = urlParams.get('previewKey') || '';
 const previewImage = document.getElementById('previewImage');
 const previewStatus = document.getElementById('previewStatus');
 const previewName = document.getElementById('previewName');
+const extensionApi = globalThis.ExtensionApi;
 
 function sendRuntimeMessage(message) {
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage(message, (response) => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-        return;
-      }
+  return extensionApi.sendMessage(message).then((response) => {
+    if (response?.error) {
+      throw new Error(response.error);
+    }
 
-      if (response?.error) {
-        reject(new Error(response.error));
-        return;
-      }
-
-      resolve(response);
-    });
+    return response;
   });
 }
 
