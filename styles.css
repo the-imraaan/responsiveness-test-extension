@@ -106,6 +106,16 @@ body {
   gap: 12px;
 }
 
+.screens.is-capturing-screenshot {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.screens.is-capturing-screenshot::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
 .screen {
   border: 1px solid #ccd5e1;
   border-radius: 12px;
@@ -123,27 +133,6 @@ body {
   position: relative;
   z-index: 1;
   background: #fff;
-}
-
-.screen-header {
-  position: absolute;
-  left: 8px;
-  right: 8px;
-  bottom: 8px;
-  z-index: 3;
-  display: flex;
-  justify-content: flex-start;
-  pointer-events: none;
-}
-
-.screen-badge {
-  background: rgba(15, 23, 42, 0.78);
-  color: #fff;
-  padding: 4px 10px;
-  font-size: 12px;
-  font-weight: 700;
-  border-radius: 999px;
-  letter-spacing: 0.01em;
 }
 
 .empty-state {

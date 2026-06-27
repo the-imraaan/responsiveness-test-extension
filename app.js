@@ -11,13 +11,27 @@ const MOBILE_GROUP_DEFAULT_SCALE = 0.7;
 const GROUP_DEFAULT_SCALES = {
   [DEFAULT_DEVICE_GROUP_ID]: MOBILE_GROUP_DEFAULT_SCALE,
   medium: DEFAULT_SCALE,
-  desktop: DEFAULT_SCALE
+  desktop: DEFAULT_SCALE,
+  custom: MOBILE_GROUP_DEFAULT_SCALE
+};
+const CAPTURE_PROFILE = {
+  tabCaptureFormat: 'png',
+  tabCaptureQuality: 90,
+  scrollDurationMs: 224,
+  scrollSettleMs: 160,
+  captureQuietWindowMs: 80,
+  captureMaxWaitMs: 350,
+  tileOverlapPx: 120,
+  stitchSearchPx: 24,
+  stitchBandPx: 64
 };
 const MIN_SCALE = 0.2;
 const MAX_SCALE = 1;
 const SCALE_STEP = 0.1;
-const INITIAL_STRIP_LOCK_MS = 2000;
-const SCROLL_LEADER_TTL_MS = 320;
+const INITIAL_STRIP_LOCK_MS = 1200;
+const SCROLL_LEADER_TTL_MS = 350;
+const CAPTURE_SCROLL_TIMEOUT_MS = 1000;
+const CAPTURE_SCROLL_EPSILON_PX = 0;
 
 const urlParams = new URLSearchParams(window.location.search);
 const testUrl = urlParams.get('testUrl');
@@ -49,6 +63,14 @@ const DEVICE_GROUPS = [
       { id: 'desktop-1728', name: '1728px', width: 1728, heightMode: 'viewport' },
       { id: 'desktop-2560', name: '2560px', width: 2560, heightMode: 'viewport' }
     ]
+  },
+  {
+    id: 'custom',
+    label: 'Custom',
+    devices: [
+      { id: 'custom-375', name: '375px', width: 375, height: 812, heightMode: 'device' },
+      { id: 'custom-1280', name: '1280px', width: 1280, heightMode: 'viewport' }
+    ]
   }
 ];
 const DEVICE_GROUPS_BY_ID = Object.fromEntries(DEVICE_GROUPS.map((group) => [group.id, group]));
@@ -56,6 +78,7 @@ const DEVICE_GROUPS_BY_ID = Object.fromEntries(DEVICE_GROUPS.map((group) => [gro
 const screens = document.getElementById('screens');
 const toolbar = document.querySelector('.toolbar');
 const screenshotButton = document.getElementById('screenshot');
+const screenshotFullPageButton = document.getElementById('screenshotFullPage');
 const recordButton = document.getElementById('record');
 const stopRecordButton = document.getElementById('stopRecord');
 const scrollSyncToggleButton = document.getElementById('scrollSyncToggle');
@@ -140,26 +163,32 @@ function renderDeviceBar() {
   deviceBar.innerHTML = '';
   if (!testUrl) return;
 
+  const isCustomGroup = selectedGroupId === 'custom';
+
   devices.forEach((device) => {
     const chip = document.createElement('span');
     chip.className = 'device-chip';
     chip.textContent = formatDeviceBadge(device);
 
-    const removeBtn = document.createElement('button');
-    removeBtn.className = 'device-chip-remove';
-    removeBtn.textContent = '\u00d7';
-    removeBtn.title = `Remove ${device.name}`;
-    removeBtn.addEventListener('click', () => removeDevice(device.id));
+    if (isCustomGroup) {
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'device-chip-remove';
+      removeBtn.textContent = '\u00d7';
+      removeBtn.title = `Remove ${device.name}`;
+      removeBtn.addEventListener('click', () => removeDevice(device.id));
+      chip.appendChild(removeBtn);
+    }
 
-    chip.appendChild(removeBtn);
     deviceBar.appendChild(chip);
   });
 
-  const addBtn = document.createElement('button');
-  addBtn.className = 'device-add-btn';
-  addBtn.textContent = '+ Add device';
-  addBtn.addEventListener('click', () => showAddDeviceForm(addBtn));
-  deviceBar.appendChild(addBtn);
+  if (isCustomGroup) {
+    const addBtn = document.createElement('button');
+    addBtn.className = 'device-add-btn';
+    addBtn.textContent = '+ Add device';
+    addBtn.addEventListener('click', () => showAddDeviceForm(addBtn));
+    deviceBar.appendChild(addBtn);
+  }
 }
 
 function showAddDeviceForm(addBtn) {
@@ -284,7 +313,7 @@ function loadImage(src) {
   });
 }
 
-function canvasToBlob(canvas, type = 'image/png') {
+function canvasToBlob(canvas, type = 'image/png', quality) {
   return new Promise((resolve, reject) => {
     canvas.toBlob((blob) => {
       if (!blob) {
@@ -293,8 +322,42 @@ function canvasToBlob(canvas, type = 'image/png') {
       }
 
       resolve(blob);
-    }, type);
+    }, type, quality);
   });
+}
+
+const MAX_SCREENSHOT_BYTES = 10 * 1024 * 1024; // 10 MB
+
+async function canvasToJpegBlobWithSizeLimit(canvas) {
+  let blob = null;
+
+  // Keep screenshot exports as JPG while still respecting the size cap.
+  const qualities = [0.92, 0.85, 0.75, 0.6, 0.45];
+  for (const q of qualities) {
+    blob = await canvasToBlob(canvas, 'image/jpeg', q);
+    if (blob.size <= MAX_SCREENSHOT_BYTES) {
+      return { blob, extension: 'jpg' };
+    }
+  }
+
+  // If still too large, scale down the canvas.
+  let scale = 0.75;
+  while (scale >= 0.25) {
+    const smallCanvas = document.createElement('canvas');
+    smallCanvas.width = Math.round(canvas.width * scale);
+    smallCanvas.height = Math.round(canvas.height * scale);
+    const ctx = smallCanvas.getContext('2d');
+    if (!ctx) break;
+    ctx.drawImage(canvas, 0, 0, smallCanvas.width, smallCanvas.height);
+    blob = await canvasToBlob(smallCanvas, 'image/jpeg', 0.7);
+    if (blob.size <= MAX_SCREENSHOT_BYTES) {
+      return { blob, extension: 'jpg' };
+    }
+    scale -= 0.15;
+  }
+
+  // Return whatever we have as last resort
+  return { blob, extension: 'jpg' };
 }
 
 function storageGet(defaults) {
@@ -368,6 +431,21 @@ async function downloadBlob(blob, filename) {
   }
 }
 
+async function openBlobInNewTab(blob) {
+  const blobUrl = URL.createObjectURL(blob);
+  const filename = `screenshot-${new Date().toISOString().replace(/[:.]/g, '-')}.jpg`;
+
+  try {
+    await sendRuntimeMessage({
+      type: 'open-image-preview',
+      blobUrl,
+      filename
+    });
+  } finally {
+    window.setTimeout(() => URL.revokeObjectURL(blobUrl), 10 * 60_000);
+  }
+}
+
 function getAvailableHeight() {
   return Math.max(200, window.innerHeight - toolbar.offsetHeight - deviceBar.offsetHeight - 24);
 }
@@ -396,6 +474,7 @@ function refreshControls() {
   const disableEditing = !hasUrl || isRecordingStarting || isRecordingActive;
 
   screenshotButton.disabled = !hasUrl || !hasDevices || isRecordingStarting || isRecordingActive;
+  screenshotFullPageButton.disabled = !hasUrl || !hasDevices || isRecordingStarting || isRecordingActive;
   recordButton.disabled = !hasUrl || !hasDevices || isRecordingStarting || isRecordingActive;
 
   recordButton.style.display = isRecordingActive ? 'none' : '';
@@ -580,7 +659,7 @@ function broadcastScrollSyncState() {
   });
 }
 
-async function setScrollSyncEnabled(nextValue, persist = true) {
+function applyScrollSyncState(nextValue, refresh = true) {
   scrollSyncEnabled = Boolean(nextValue);
 
   if (!scrollSyncEnabled) {
@@ -589,10 +668,33 @@ async function setScrollSyncEnabled(nextValue, persist = true) {
 
   updateScrollSyncToggle();
   broadcastScrollSyncState();
-  refreshControls();
+
+  if (refresh) {
+    refreshControls();
+  }
+}
+
+async function setScrollSyncEnabled(nextValue, persist = true) {
+  applyScrollSyncState(nextValue, true);
 
   if (persist) {
     await persistScrollSync();
+  }
+}
+
+async function runWithSuspendedScrollSync(task) {
+  const shouldRestore = scrollSyncEnabled;
+
+  if (shouldRestore) {
+    applyScrollSyncState(false, false);
+  }
+
+  try {
+    return await task();
+  } finally {
+    if (shouldRestore) {
+      applyScrollSyncState(true, false);
+    }
   }
 }
 
@@ -616,18 +718,23 @@ function getFitScale() {
   return clampScale(Math.min(1, availableWidth / widestDevice));
 }
 
-async function captureVisibleTab() {
-  const response = await sendRuntimeMessage({ type: 'capture-visible-tab' });
+async function captureVisibleTab(captureProfile = CAPTURE_PROFILE) {
+  const response = await sendRuntimeMessage({
+    type: 'capture-visible-tab',
+    format: captureProfile.tabCaptureFormat,
+    quality: captureProfile.tabCaptureQuality
+  });
   return response.dataUrl;
 }
 
-function getCaptureOffsets(totalWidth, viewportWidth) {
+function getCaptureOffsets(totalWidth, viewportWidth, overlap = 0) {
   const offsets = [0];
   const maxOffset = Math.max(0, totalWidth - viewportWidth);
+  const step = Math.max(1, viewportWidth - overlap);
   let nextOffset = 0;
 
   while (nextOffset < maxOffset) {
-    nextOffset = Math.min(maxOffset, nextOffset + viewportWidth);
+    nextOffset = Math.min(maxOffset, nextOffset + step);
     if (nextOffset === offsets[offsets.length - 1]) {
       break;
     }
@@ -638,92 +745,571 @@ function getCaptureOffsets(totalWidth, viewportWidth) {
   return offsets;
 }
 
-async function settleBeforeCapture() {
-  await waitForNextFrame();
-  await waitForNextFrame();
-  await waitForTimeout(120);
+async function settleBeforeCapture(options = {}) {
+  const { frames = 1, delayMs = 18 } = options;
+
+  for (let index = 0; index < frames; index += 1) {
+    await waitForNextFrame();
+  }
+
+  if (delayMs > 0) {
+    await waitForTimeout(delayMs);
+  }
+}
+
+function getTileOverlap(previousOffset, offset, viewportSize) {
+  if (!Number.isFinite(previousOffset)) {
+    return 0;
+  }
+
+  return Math.max(0, previousOffset + viewportSize - offset);
+}
+
+function setScreensCaptureMode(enabled) {
+  screens.classList.toggle('is-capturing-screenshot', Boolean(enabled));
+  document.body.classList.toggle('is-capturing-screenshot', Boolean(enabled));
+}
+
+function getScreensCaptureMetrics() {
+  const styles = window.getComputedStyle(screens);
+  const gap = parseFloat(styles.columnGap || styles.gap) || 0;
+
+  return {
+    gap
+  };
+}
+
+function isScrollNearTarget(element, left, top, epsilon = CAPTURE_SCROLL_EPSILON_PX) {
+  return Math.abs(element.scrollLeft - left) <= epsilon && Math.abs(element.scrollTop - top) <= epsilon;
+}
+
+async function scrollScreensForCapture(
+  left = screens.scrollLeft,
+  top = screens.scrollTop,
+  settleMs = CAPTURE_PROFILE.scrollSettleMs
+) {
+  const targetLeft = Math.max(0, Math.round(left));
+  const targetTop = Math.max(0, Math.round(top));
+
+  if (!isScrollNearTarget(screens, targetLeft, targetTop)) {
+    screens.scrollTo({
+      left: targetLeft,
+      top: targetTop,
+      behavior: 'smooth'
+    });
+
+    await new Promise((resolve) => {
+      const start = performance.now();
+      let lastLeft = screens.scrollLeft;
+      let lastTop = screens.scrollTop;
+      let stableFrames = 0;
+
+      function tick(now) {
+        const currentLeft = screens.scrollLeft;
+        const currentTop = screens.scrollTop;
+        const atTarget = isScrollNearTarget(screens, targetLeft, targetTop);
+        const barelyMoving =
+          Math.abs(currentLeft - lastLeft) <= CAPTURE_SCROLL_EPSILON_PX &&
+          Math.abs(currentTop - lastTop) <= CAPTURE_SCROLL_EPSILON_PX;
+
+        stableFrames = atTarget && barelyMoving ? stableFrames + 1 : 0;
+        lastLeft = currentLeft;
+        lastTop = currentTop;
+
+        if (stableFrames >= 2 || now - start >= CAPTURE_SCROLL_TIMEOUT_MS) {
+          screens.scrollTo({
+            left: targetLeft,
+            top: targetTop,
+            behavior: 'auto'
+          });
+          resolve();
+          return;
+        }
+
+        window.requestAnimationFrame(tick);
+      }
+
+      window.requestAnimationFrame(tick);
+    });
+  }
+
+  await waitForTimeout(settleMs);
+}
+
+function applyEntryFullPageCaptureStyles(entry, scrollInfo, scale) {
+  const viewportHeight = scrollInfo.viewportHeight;
+  const scaledHeight = Math.round(viewportHeight * scale);
+
+  entry.iframe.style.width = `${entry.device.width}px`;
+  entry.iframe.style.height = `${viewportHeight}px`;
+  entry.iframe.style.transform = `scale(${scale})`;
+  entry.iframe.style.transformOrigin = 'top left';
+
+  entry.screen.style.width = `${Math.round(entry.device.width * scale)}px`;
+  entry.screen.style.height = `${scaledHeight}px`;
+  entry.screen.style.overflow = 'hidden';
+}
+
+function restoreEntryCaptureStyles(entry, saved) {
+  entry.screen.style.width = saved.screenWidth;
+  entry.screen.style.height = saved.screenHeight;
+  entry.screen.style.overflow = saved.screenOverflow;
+  entry.iframe.style.width = saved.iframeWidth;
+  entry.iframe.style.height = saved.iframeHeight;
+  entry.iframe.style.transform = saved.iframeTransform;
+  entry.iframe.style.transformOrigin = saved.iframeTransformOrigin;
+}
+
+function createCapturedTileCanvas(image, sourceX, sourceY, sourceWidth, sourceHeight, tileWidth, tileHeight) {
+  const tileCanvas = document.createElement('canvas');
+  tileCanvas.width = Math.max(1, tileWidth);
+  tileCanvas.height = Math.max(1, tileHeight);
+
+  const tileContext = tileCanvas.getContext('2d', { willReadFrequently: true });
+  if (!tileContext) {
+    throw new Error('Could not prepare the screenshot tile canvas.');
+  }
+
+  tileContext.drawImage(
+    image,
+    sourceX,
+    sourceY,
+    sourceWidth,
+    sourceHeight,
+    0,
+    0,
+    tileCanvas.width,
+    tileCanvas.height
+  );
+
+  return tileCanvas;
+}
+
+function growCanvasHeight(canvas, nextHeight) {
+  const targetHeight = Math.max(canvas.height, Math.round(nextHeight));
+  if (targetHeight === canvas.height) {
+    return canvas;
+  }
+
+  const expandedCanvas = document.createElement('canvas');
+  expandedCanvas.width = canvas.width;
+  expandedCanvas.height = targetHeight;
+
+  const expandedContext = expandedCanvas.getContext('2d');
+  if (!expandedContext) {
+    throw new Error('Could not resize the screenshot canvas.');
+  }
+
+  expandedContext.fillStyle = '#eef2f6';
+  expandedContext.fillRect(0, 0, expandedCanvas.width, expandedCanvas.height);
+  expandedContext.drawImage(canvas, 0, 0);
+
+  return expandedCanvas;
+}
+
+async function captureDeviceFullPageCanvas(entry, scrollInfo, captureProfile) {
+  const initialRect = entry.iframe.getBoundingClientRect();
+  const deviceWidth = Math.max(1, Math.round(initialRect.width));
+  const viewportHeightDisplay = Math.max(1, Math.round(initialRect.height));
+  const displayScaleY = viewportHeightDisplay / Math.max(1, scrollInfo.viewportHeight);
+  const overlapContentY = Math.max(0, Math.round(captureProfile.tileOverlapPx / Math.max(displayScaleY, 0.01)));
+  const verticalOffsets = getCaptureOffsets(scrollInfo.scrollHeight, scrollInfo.viewportHeight, overlapContentY);
+
+  let canvas = null;
+  let context = null;
+
+  try {
+    for (let rowIndex = 0; rowIndex < verticalOffsets.length; rowIndex += 1) {
+      const vOffset = verticalOffsets[rowIndex];
+
+      if (rowIndex === 1) {
+        postToFrame(entry, 'set-fixed-elements-hidden', { hidden: true });
+        await settleBeforeCapture({ frames: 1, delayMs: 40 });
+      }
+
+      const scrollResult = await requestSetScrollTop(entry, {
+        scrollTop: vOffset,
+        smooth: true,
+        durationMs: captureProfile.scrollDurationMs
+      });
+      const readyInfo = await requestCaptureReady(entry, {
+        minQuietMs: captureProfile.captureQuietWindowMs,
+        maxWaitMs: captureProfile.captureMaxWaitMs
+      });
+      const settledOffset = Number.isFinite(Number(readyInfo?.scrollTop))
+        ? Number(readyInfo.scrollTop)
+        : Number.isFinite(Number(scrollResult?.scrollTop))
+          ? Number(scrollResult.scrollTop)
+          : vOffset;
+      const settledScrollHeight = Number.isFinite(Number(readyInfo?.scrollHeight))
+        ? Number(readyInfo.scrollHeight)
+        : scrollInfo.scrollHeight;
+
+      const dataUrl = await captureVisibleTab(captureProfile);
+      const image = await loadImage(dataUrl);
+      const iframeRect = entry.iframe.getBoundingClientRect();
+      const screenshotScaleX = image.naturalWidth / window.innerWidth;
+      const screenshotScaleY = image.naturalHeight / window.innerHeight;
+      const sourceX = Math.max(0, iframeRect.left * screenshotScaleX);
+      const sourceY = Math.max(0, iframeRect.top * screenshotScaleY);
+
+      if (!canvas) {
+        canvas = document.createElement('canvas');
+        canvas.width = deviceWidth;
+        canvas.height = Math.max(
+          viewportHeightDisplay,
+          Math.round(Math.max(scrollInfo.scrollHeight, settledScrollHeight) * displayScaleY)
+        );
+
+        context = canvas.getContext('2d');
+        if (!context) {
+          throw new Error('Could not prepare the screenshot canvas.');
+        }
+
+        context.fillStyle = '#eef2f6';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+      } else if (settledScrollHeight > scrollInfo.scrollHeight) {
+        canvas = growCanvasHeight(canvas, Math.round(settledScrollHeight * displayScaleY));
+        context = canvas.getContext('2d');
+        if (!context) {
+          throw new Error('Could not prepare the expanded screenshot canvas.');
+        }
+      }
+
+      const tileCanvas = createCapturedTileCanvas(
+        image,
+        sourceX,
+        sourceY,
+        deviceWidth * screenshotScaleX,
+        viewportHeightDisplay * screenshotScaleY,
+        deviceWidth,
+        viewportHeightDisplay
+      );
+      const destinationY = Math.max(0, Math.round(settledOffset * displayScaleY));
+      const remainingHeight = Math.max(0, canvas.height - destinationY);
+      const drawHeight = Math.max(0, Math.min(tileCanvas.height, remainingHeight));
+
+      if (!drawHeight) {
+        continue;
+      }
+
+      context.drawImage(tileCanvas, 0, 0, deviceWidth, drawHeight, 0, destinationY, deviceWidth, drawHeight);
+    }
+  } finally {
+    postToFrame(entry, 'set-fixed-elements-hidden', { hidden: false });
+  }
+
+  if (!canvas) {
+    throw new Error('Could not capture that device.');
+  }
+
+  return canvas;
+}
+
+function getEntryHorizontalCaptureTarget(entry) {
+  const entryLeft = Math.round(entry.screen.offsetLeft);
+  const entryWidth = Math.round(entry.screen.offsetWidth);
+  const currentLeft = Math.round(screens.scrollLeft);
+  const viewportWidth = Math.max(1, Math.round(screens.clientWidth));
+  const entryRight = entryLeft + entryWidth;
+  const visibleRight = currentLeft + viewportWidth;
+  const maxScrollLeft = Math.max(0, Math.round(screens.scrollWidth - viewportWidth));
+
+  let targetLeft = currentLeft;
+
+  if (entryLeft < currentLeft) {
+    targetLeft = entryLeft;
+  } else if (entryRight > visibleRight) {
+    targetLeft = entryRight - viewportWidth;
+  }
+
+  return Math.max(0, Math.min(maxScrollLeft, targetLeft));
+}
+
+async function scrollEntryIntoViewForCapture(entry, settleMs) {
+  const targetLeft = getEntryHorizontalCaptureTarget(entry);
+  await scrollScreensForCapture(targetLeft, screens.scrollTop, settleMs);
 }
 
 async function captureAllDeviceViews() {
-  const totalWidth = Math.round(screens.scrollWidth);
-  const viewportWidth = Math.round(screens.clientWidth);
-  const viewportHeight = Math.round(screens.clientHeight);
-
-  if (!totalWidth || !viewportWidth || !viewportHeight) {
-    throw new Error('There is no device strip available to capture.');
-  }
-
-  const captureRect = screens.getBoundingClientRect();
-  const offsets = getCaptureOffsets(totalWidth, viewportWidth);
+  const captureProfile = CAPTURE_PROFILE;
   const originalScrollLeft = screens.scrollLeft;
+  const originalScrollTop = screens.scrollTop;
   const captures = [];
 
   try {
-    for (const offset of offsets) {
-      screens.scrollLeft = offset;
-      await settleBeforeCapture();
+    setScreensCaptureMode(true);
+    await settleBeforeCapture({ delayMs: 8 });
 
-      const dataUrl = await captureVisibleTab();
+    const totalWidth = Math.round(screens.scrollWidth);
+    const viewportWidth = Math.round(screens.clientWidth);
+    const viewportHeight = Math.round(screens.clientHeight);
+
+    if (!totalWidth || !viewportWidth || !viewportHeight) {
+      throw new Error('There is no device strip available to capture.');
+    }
+
+    const captureRect = screens.getBoundingClientRect();
+    const offsets = getCaptureOffsets(totalWidth, viewportWidth, captureProfile.tileOverlapPx);
+
+    for (const offset of offsets) {
+      await scrollScreensForCapture(offset, originalScrollTop, captureProfile.scrollSettleMs);
+      const dataUrl = await captureVisibleTab(captureProfile);
       const image = await loadImage(dataUrl);
       captures.push({ offset, image });
     }
+    await waitForNextFrame();
+
+    const firstCapture = captures[0];
+    const scaleX = firstCapture.image.naturalWidth / window.innerWidth;
+    const scaleY = firstCapture.image.naturalHeight / window.innerHeight;
+    const sourceX = Math.max(0, captureRect.left * scaleX);
+    const sourceY = Math.max(0, captureRect.top * scaleY);
+    const stitchedWidth = Math.max(1, totalWidth);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = stitchedWidth;
+    canvas.height = Math.max(1, viewportHeight);
+
+    const context = canvas.getContext('2d');
+    if (!context) {
+      throw new Error('Could not prepare the screenshot canvas.');
+    }
+
+    context.fillStyle = '#eef2f6';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+
+    captures.forEach(({ offset, image }, index) => {
+      const overlapLeft = getTileOverlap(offsets[index - 1], offset, viewportWidth);
+      const availableWidth = Math.max(0, totalWidth - offset);
+      const tileWidth = Math.max(0, Math.min(viewportWidth, availableWidth) - overlapLeft);
+      const tileHeight = Math.max(1, Math.min(viewportHeight, canvas.height));
+      const destinationX = offset + overlapLeft;
+      const drawWidth = Math.max(1, Math.min(tileWidth, canvas.width - destinationX));
+      const drawHeight = Math.max(1, Math.min(tileHeight, canvas.height));
+      const tileSourceX = sourceX + overlapLeft * scaleX;
+
+      context.drawImage(
+        image,
+        tileSourceX,
+        sourceY,
+        drawWidth * scaleX,
+        drawHeight * scaleY,
+        destinationX,
+        0,
+        drawWidth,
+        drawHeight
+      );
+    });
+
+    return canvasToJpegBlobWithSizeLimit(canvas);
   } finally {
-    screens.scrollLeft = originalScrollLeft;
+    screens.scrollTo({
+      left: originalScrollLeft,
+      top: originalScrollTop,
+      behavior: 'auto'
+    });
+    setScreensCaptureMode(false);
   }
-
-  await settleBeforeCapture();
-
-  const firstCapture = captures[0];
-  const scaleX = firstCapture.image.naturalWidth / window.innerWidth;
-  const scaleY = firstCapture.image.naturalHeight / window.innerHeight;
-  const sourceX = Math.max(0, Math.round(captureRect.left * scaleX));
-  const sourceY = Math.max(0, Math.round(captureRect.top * scaleY));
-  const sourceHeight = Math.max(1, Math.round(viewportHeight * scaleY));
-  const stitchedWidth = Math.max(1, Math.round(totalWidth * scaleX));
-
-  const canvas = document.createElement('canvas');
-  canvas.width = stitchedWidth;
-  canvas.height = sourceHeight;
-
-  const context = canvas.getContext('2d');
-  if (!context) {
-    throw new Error('Could not prepare the screenshot canvas.');
-  }
-
-  context.fillStyle = '#eef2f6';
-  context.fillRect(0, 0, canvas.width, canvas.height);
-
-  captures.forEach(({ offset, image }) => {
-    const sourceWidth = Math.max(1, Math.min(Math.round(viewportWidth * scaleX), image.naturalWidth - sourceX));
-    const sourceCropHeight = Math.max(1, Math.min(sourceHeight, image.naturalHeight - sourceY));
-    const destinationX = Math.round(offset * scaleX);
-    const drawWidth = Math.max(1, Math.min(sourceWidth, canvas.width - destinationX));
-    const drawHeight = Math.max(1, Math.min(sourceCropHeight, canvas.height));
-
-    context.drawImage(
-      image,
-      sourceX,
-      sourceY,
-      drawWidth,
-      drawHeight,
-      destinationX,
-      0,
-      drawWidth,
-      drawHeight
-    );
-  });
-
-  return canvasToBlob(canvas);
 }
 
 async function handleScreenshot() {
   screenshotButton.disabled = true;
 
   try {
-    const screenshotBlob = await captureAllDeviceViews();
-    await downloadBlob(screenshotBlob, buildFilename('responsive-tester-screenshot', 'png'));
+    await waitForFramesCaptureReady(frameEntries, CAPTURE_PROFILE);
+    const { blob: screenshotBlob } = await runWithSuspendedScrollSync(() => captureAllDeviceViews());
+    await openBlobInNewTab(screenshotBlob);
   } catch (error) {
     logError('Screenshot failed.', error);
+  } finally {
+    refreshControls();
+  }
+}
+
+function requestScrollInfo(entry) {
+  return new Promise((resolve) => {
+    function onMessage(event) {
+      const data = event.data;
+      if (!data || data.source !== APP_CHANNEL || data.type !== 'scroll-info') return;
+      if (event.source !== entry.iframe.contentWindow) return;
+      window.removeEventListener('message', onMessage);
+      resolve(data.payload);
+    }
+    window.addEventListener('message', onMessage);
+    postToFrame(entry, 'get-scroll-info');
+    setTimeout(() => {
+      window.removeEventListener('message', onMessage);
+      resolve(null);
+    }, 3000);
+  });
+}
+
+function requestSetScrollTop(entry, scrollTop) {
+  return new Promise((resolve) => {
+    function onMessage(event) {
+      const data = event.data;
+      if (!data || data.source !== APP_CHANNEL || data.type !== 'scroll-top-applied') return;
+      if (event.source !== entry.iframe.contentWindow) return;
+      window.removeEventListener('message', onMessage);
+      resolve(data.payload);
+    }
+    window.addEventListener('message', onMessage);
+    const payload = typeof scrollTop === 'object' && scrollTop !== null ? scrollTop : { scrollTop };
+    postToFrame(entry, 'set-scroll-top', payload);
+    setTimeout(() => {
+      window.removeEventListener('message', onMessage);
+      resolve(null);
+    }, 3000);
+  });
+}
+
+function requestCaptureReady(entry, options = {}) {
+  return new Promise((resolve) => {
+    function onMessage(event) {
+      const data = event.data;
+      if (!data || data.source !== APP_CHANNEL || data.type !== 'capture-ready') return;
+      if (event.source !== entry.iframe.contentWindow) return;
+      window.removeEventListener('message', onMessage);
+      resolve(data.payload || null);
+    }
+
+    window.addEventListener('message', onMessage);
+    postToFrame(entry, 'await-capture-ready', options);
+    setTimeout(() => {
+      window.removeEventListener('message', onMessage);
+      resolve(null);
+    }, Math.max(2500, Number(options.maxWaitMs) + 500 || 2500));
+  });
+}
+
+async function waitForFramesCaptureReady(entries, captureProfile = CAPTURE_PROFILE) {
+  const readyEntries = entries.filter((entry) => entry?.ready);
+  if (!readyEntries.length) {
+    return;
+  }
+
+  await Promise.all(
+    readyEntries.map((entry) =>
+      requestCaptureReady(entry, {
+        minQuietMs: captureProfile.captureQuietWindowMs,
+        maxWaitMs: captureProfile.captureMaxWaitMs
+      }).catch(() => null)
+    )
+  );
+}
+
+async function captureFullPageScreenshot() {
+  const captureProfile = CAPTURE_PROFILE;
+  const readyEntries = frameEntries.filter((e) => e.ready);
+  if (!readyEntries.length) {
+    throw new Error('No device frames are ready for capture.');
+  }
+
+  const scrollInfos = await Promise.all(readyEntries.map((entry) => requestScrollInfo(entry)));
+
+  const originalStyles = readyEntries.map((entry) => ({
+    screenWidth: entry.screen.style.width,
+    screenHeight: entry.screen.style.height,
+    screenOverflow: entry.screen.style.overflow,
+    iframeWidth: entry.iframe.style.width,
+    iframeHeight: entry.iframe.style.height,
+    iframeTransform: entry.iframe.style.transform,
+    iframeTransformOrigin: entry.iframe.style.transformOrigin
+  }));
+  try {
+    setScreensCaptureMode(true);
+    const scale = currentScale;
+    const capturedDevices = [];
+
+    for (let index = 0; index < readyEntries.length; index += 1) {
+      const entry = readyEntries[index];
+      const scrollInfo = scrollInfos[index];
+      if (!scrollInfo) {
+        continue;
+      }
+
+      applyEntryFullPageCaptureStyles(entry, scrollInfo, scale);
+      postToFrame(entry, 'set-overflow', { hidden: true });
+      postToFrame(entry, 'set-fixed-elements-hidden', { hidden: false });
+      await scrollEntryIntoViewForCapture(entry, captureProfile.scrollSettleMs);
+      await requestSetScrollTop(entry, { scrollTop: 0, smooth: false });
+      const readyInfo = await requestCaptureReady(entry, {
+        minQuietMs: captureProfile.captureQuietWindowMs,
+        maxWaitMs: captureProfile.captureMaxWaitMs
+      });
+      const captureScrollInfo = {
+        ...scrollInfo,
+        scrollHeight: Number.isFinite(Number(readyInfo?.scrollHeight))
+          ? Math.max(scrollInfo.scrollHeight, Number(readyInfo.scrollHeight))
+          : scrollInfo.scrollHeight
+      };
+
+      const canvas = await captureDeviceFullPageCanvas(entry, captureScrollInfo, captureProfile);
+      capturedDevices.push(canvas);
+
+      restoreEntryCaptureStyles(entry, originalStyles[index]);
+      postToFrame(entry, 'set-overflow', { hidden: false });
+      postToFrame(entry, 'set-fixed-elements-hidden', { hidden: false });
+      await settleBeforeCapture({ delayMs: 10 });
+    }
+
+    if (!capturedDevices.length) {
+      throw new Error('Could not capture any device screenshots.');
+    }
+
+    const { gap } = getScreensCaptureMetrics();
+    const mergedGap = Math.round(gap);
+    const stitchedWidth = capturedDevices.reduce((total, canvas, index) => {
+      return total + canvas.width + (index > 0 ? mergedGap : 0);
+    }, 0);
+    const stitchedHeight = capturedDevices.reduce((maxHeight, canvas) => {
+      return Math.max(maxHeight, canvas.height);
+    }, 0);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, stitchedWidth);
+    canvas.height = Math.max(1, stitchedHeight);
+
+    const context = canvas.getContext('2d');
+    if (!context) {
+      throw new Error('Could not prepare the screenshot canvas.');
+    }
+
+    context.fillStyle = '#eef2f6';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+
+    let currentX = 0;
+    capturedDevices.forEach((deviceCanvas, index) => {
+      if (index > 0) {
+        currentX += mergedGap;
+      }
+
+      context.drawImage(deviceCanvas, currentX, 0);
+      currentX += deviceCanvas.width;
+    });
+
+    return canvasToJpegBlobWithSizeLimit(canvas);
+  } finally {
+    readyEntries.forEach((entry, i) => {
+      restoreEntryCaptureStyles(entry, originalStyles[i]);
+      postToFrame(entry, 'set-overflow', { hidden: false });
+      postToFrame(entry, 'set-fixed-elements-hidden', { hidden: false });
+    });
+
+    updateScreenLayout();
+    setScreensCaptureMode(false);
+  }
+}
+
+async function handleFullPageScreenshot() {
+  screenshotFullPageButton.disabled = true;
+
+  try {
+    const { blob: screenshotBlob } = await runWithSuspendedScrollSync(() => captureFullPageScreenshot());
+    await openBlobInNewTab(screenshotBlob);
+  } catch (error) {
+    logError('Full page screenshot failed.', error);
   } finally {
     refreshControls();
   }
@@ -973,6 +1559,7 @@ function registerEventListeners() {
   window.addEventListener('message', handleFrameMessage);
 
   screenshotButton.addEventListener('click', handleScreenshot);
+  screenshotFullPageButton.addEventListener('click', handleFullPageScreenshot);
   recordButton.addEventListener('click', startRecording);
   stopRecordButton.addEventListener('click', stopRecording);
   scrollSyncToggleButton.addEventListener('click', () => {

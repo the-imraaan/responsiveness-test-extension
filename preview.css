@@ -1,0 +1,57 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: Arial, sans-serif;
+  background: #e8edf5;
+  color: #102033;
+}
+
+.preview-shell {
+  min-height: 100vh;
+  padding: 20px;
+}
+
+.preview-header {
+  margin: 0 auto 16px;
+  max-width: 1200px;
+}
+
+.preview-title {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.preview-name {
+  margin: 6px 0 0;
+  color: #55657a;
+  font-size: 13px;
+}
+
+.preview-stage {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 16px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 12px 36px rgba(15, 23, 42, 0.12);
+  overflow: auto;
+}
+
+.preview-status {
+  margin: 0;
+  color: #55657a;
+  font-size: 14px;
+}
+
+#previewImage {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 12px;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
+}
